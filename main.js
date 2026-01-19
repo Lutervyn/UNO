@@ -10,6 +10,17 @@ const back = new Image();
 const tableImg = new Image();
 
 // --- Global State ---
+function logToScreen(msg) {
+  const consoleEl = document.getElementById('debug-console');
+  if (consoleEl) {
+    const div = document.createElement('div');
+    div.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    consoleEl.appendChild(div);
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+  }
+  console.log(msg);
+}
+
 let peer;
 let myPeerId = null;
 let isHost = false;
@@ -499,6 +510,7 @@ function initPeer() {
 
   peer.on('open', (id) => {
     myPeerId = id;
+    logToScreen('PeerJS: Connected with ID ' + id);
     const statusEl = document.getElementById('peer-status');
     if (statusEl) {
       statusEl.innerText = "Connected to network";
@@ -506,7 +518,6 @@ function initPeer() {
     }
     // Strip the prefix for display
     const displayId = id.replace('UNO-', '');
-    console.log('My Display ID:', displayId);
     if (document.getElementById('lobby-room-code')) {
       document.getElementById('lobby-room-code').innerText = displayId;
     }
@@ -535,22 +546,17 @@ function initPeer() {
   });
 
   peer.on('error', (err) => {
-    console.error(err);
+    logToScreen('PeerJS Error: ' + err.type);
     const statusEl = document.getElementById('peer-status');
     if (statusEl) {
       statusEl.innerText = "Connection Error: " + err.type;
       statusEl.style.color = "#e74c3c";
     }
     if (err.type === 'unavailable-id') {
-      console.log('ID taken, retrying...');
       peer.destroy();
-      setTimeout(initPeer, 500); // Retry with new ID
+      setTimeout(initPeer, 500);
     } else if (err.type === 'peer-unavailable') {
-      showToast("Error: Room not found. Check the code!");
-    } else if (err.type === 'network') {
-      showToast("Network Error: Check your internet.");
-    } else {
-      console.log("PeerJS Error:", err.type);
+      showToast("Error: Room not found!");
     }
   });
 }
@@ -559,11 +565,8 @@ function connectToHost(hostId) {
   const cleanId = hostId.trim().toUpperCase();
   const fullHostId = cleanId.startsWith('UNO-') ? cleanId : 'UNO-' + cleanId;
 
-  console.log('PeerJS: Attempting to connect to host:', fullHostId);
-  showToast("Connecting to room " + cleanId + "...");
-  
-  const statusEl = document.getElementById('peer-status');
-  if (statusEl) statusEl.innerText = "Connecting to " + cleanId + "...";
+  logToScreen('Connecting to ' + fullHostId);
+  showToast("Connecting...");
 
   hostConn = peer.connect(fullHostId, {
     reliable: true
@@ -579,7 +582,7 @@ function connectToHost(hostId) {
     document.getElementById('join-room-form').style.display = 'none';
     document.getElementById('lobby-view').style.display = 'block';
     document.getElementById('lobby-room-code').innerText = cleanId;
-    
+
     const statusEl = document.getElementById('peer-status');
     if (statusEl) statusEl.innerText = "Joined Room: " + cleanId;
   });
