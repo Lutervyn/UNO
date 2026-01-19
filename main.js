@@ -481,7 +481,18 @@ function initPeer() {
       'iceServers': [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' }
+        { urls: 'stun:stun2.l.google.com:19302' },
+        // Public TURN servers (OpenRelay)
+        {
+          urls: 'turn:openrelay.metered.ca:80',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        }
       ]
     }
   });
@@ -550,6 +561,9 @@ function connectToHost(hostId) {
 
   console.log('PeerJS: Attempting to connect to host:', fullHostId);
   showToast("Connecting to room " + cleanId + "...");
+  
+  const statusEl = document.getElementById('peer-status');
+  if (statusEl) statusEl.innerText = "Connecting to " + cleanId + "...";
 
   hostConn = peer.connect(fullHostId, {
     reliable: true
@@ -561,9 +575,13 @@ function connectToHost(hostId) {
     // Send join request
     hostConn.send({ type: 'joinRoom', data: { playerName } });
 
-    document.getElementById('menu-overlay').style.display = 'none';
+    // Fix: Don't hide menu-overlay, just hide the form and show lobby
+    document.getElementById('join-room-form').style.display = 'none';
     document.getElementById('lobby-view').style.display = 'block';
     document.getElementById('lobby-room-code').innerText = cleanId;
+    
+    const statusEl = document.getElementById('peer-status');
+    if (statusEl) statusEl.innerText = "Joined Room: " + cleanId;
   });
 
   hostConn.on('data', (msg) => {
