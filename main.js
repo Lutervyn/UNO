@@ -422,6 +422,17 @@ let gameServer = null;
 // --- Initialization ---
 
 function init() {
+  // Security Check: PeerJS does not work well with file:// protocol
+  if (window.location.protocol === 'file:') {
+    alert("CRITICAL ERROR: You are running the game by double-clicking the file. PeerJS (the multiplayer engine) REQUIRES a web server to work.\n\nPlease use VS Code 'Live Server' or upload these files to a host like GitHub Pages.");
+    const statusEl = document.getElementById('peer-status');
+    if (statusEl) {
+      statusEl.innerText = "ERROR: Use a Web Server (http://)";
+      statusEl.style.color = "#e74c3c";
+    }
+    return;
+  }
+
   ctx.font = "16px 'Segoe UI', sans-serif";
   canvas.style.backgroundColor = '#5d4037';
 
@@ -523,26 +534,36 @@ function initPeer() {
       console.log('ID taken, retrying...');
       peer.destroy();
       setTimeout(initPeer, 500); // Retry with new ID
+    } else if (err.type === 'peer-unavailable') {
+      showToast("Error: Room not found. Check the code!");
+    } else if (err.type === 'network') {
+      showToast("Network Error: Check your internet.");
     } else {
-      alert('Connection Error: ' + err.type);
+      console.log("PeerJS Error:", err.type);
     }
   });
 }
 
 function connectToHost(hostId) {
-  const fullHostId = hostId.startsWith('UNO-') ? hostId : 'UNO-' + hostId;
+  const cleanId = hostId.trim().toUpperCase();
+  const fullHostId = cleanId.startsWith('UNO-') ? cleanId : 'UNO-' + cleanId;
+
+  console.log('PeerJS: Attempting to connect to host:', fullHostId);
+  showToast("Connecting to room " + cleanId + "...");
+
   hostConn = peer.connect(fullHostId, {
     reliable: true
   });
 
   hostConn.on('open', () => {
-    console.log('Connected to host');
+    console.log('PeerJS: Connection established with host');
+    showToast("Joined Room!");
     // Send join request
     hostConn.send({ type: 'joinRoom', data: { playerName } });
 
-    document.getElementById('join-room-form').style.display = 'none';
+    document.getElementById('menu-overlay').style.display = 'none';
     document.getElementById('lobby-view').style.display = 'block';
-    document.getElementById('lobby-room-code').innerText = hostId;
+    document.getElementById('lobby-room-code').innerText = cleanId;
   });
 
   hostConn.on('data', (msg) => {
@@ -653,12 +674,24 @@ function startAnimation(type, card, sx, sy, tx, ty, duration) {
   });
 }
 
+function getScales() {
+  const isMobile = canvas.width < 1024;
+  return {
+    hand: isMobile ? 0.3 : 0.45,
+    opponent: isMobile ? 0.2 : 0.3,
+    center: isMobile ? 0.25 : 0.3375,
+    pile: isMobile ? 0.25 : 0.3375,
+    spacing: isMobile ? 40 : 60
+  };
+}
+
 function getCardPosInHand(index, total) {
-  const cardScale = 0.45;
+  const scales = getScales();
+  const cardScale = scales.hand;
   const cardW = cdWidth * cardScale;
   const cardH = cdHeight * cardScale;
   const maxTotalWidth = canvas.width - 100;
-  let spacing = 60;
+  let spacing = scales.spacing;
   let totalWidth = (total - 1) * spacing + cardW;
   if (totalWidth > maxTotalWidth) {
     spacing = (maxTotalWidth - cardW) / (total - 1);
@@ -740,9 +773,13 @@ function setupMenu() {
   };
 
   document.getElementById('btn-join-submit').onclick = () => {
+    if (!myPeerId) {
+      alert("Still connecting to the network. Please wait a moment.");
+      return;
+    }
     playerName = nameInput.value.trim() || playerName;
     localStorage.setItem('playerName', playerName);
-    const code = document.getElementById('room-code-input').value.trim();
+    const code = document.getElementById('room-code-input').value.trim().toUpperCase();
     if (code) {
       connectToHost(code);
       toggleFullscreen();
@@ -855,11 +892,12 @@ function onMouseClick(e) {
 
   // Hand
   if (hand.length > 0) {
-    const cardScale = 0.45;
+    const scales = getScales();
+    const cardScale = scales.hand;
     const cardW = cdWidth * cardScale;
     const cardH = cdHeight * cardScale;
     const maxTotalWidth = canvas.width - 100;
-    let spacing = 60;
+    let spacing = scales.spacing;
     let totalWidth = (hand.length - 1) * spacing + cardW;
     if (totalWidth > maxTotalWidth) {
       spacing = (maxTotalWidth - cardW) / (hand.length - 1);
@@ -895,7 +933,8 @@ function drawScene() {
 
   // Center Card
   if (currentCardOnBoard !== null) {
-    const cardScale = 0.3375;
+    const scales = getScales();
+    const cardScale = scales.center;
     const cardW = cdWidth * cardScale;
     const cardH = cdHeight * cardScale;
     const sx = 1 + cdWidth * (currentCardOnBoard % 14);
@@ -919,7 +958,8 @@ function drawScene() {
   drawHand();
 
   // Draw Pile
-  const pileScale = 0.3375;
+  const scales = getScales();
+  const pileScale = scales.pile;
   const pileW = cdWidth * pileScale;
   const pileH = cdHeight * pileScale;
   const pileX = canvas.width - pileW - 40;
@@ -953,7 +993,8 @@ function drawScene() {
       curY = anim.sy + (canvas.height - 100 - anim.sy) * ease;
     }
 
-    const scale = 0.3375 + (0.45 - 0.3375) * (anim.type === 'draw' ? ease : 1 - ease);
+    const scales = getScales();
+    const scale = scales.pile + (scales.hand - scales.pile) * (anim.type === 'draw' ? ease : 1 - ease);
     const w = cdWidth * scale;
     const h = cdHeight * scale;
 
@@ -1083,7 +1124,8 @@ function drawOpponents() {
 
   // Simple top layout for 1 opponent
   const opponent = others[0];
-  const cardScale = 0.3;
+  const scales = getScales();
+  const cardScale = scales.opponent;
   const cardW = cdWidth * cardScale;
   const cardH = cdHeight * cardScale;
   const spacing = 20;
@@ -1108,11 +1150,12 @@ function drawOpponents() {
 
 function drawHand() {
   if (hand.length === 0) return;
-  const cardScale = 0.45;
+  const scales = getScales();
+  const cardScale = scales.hand;
   const cardW = cdWidth * cardScale;
   const cardH = cdHeight * cardScale;
   const maxTotalWidth = canvas.width - 100;
-  let spacing = 60;
+  let spacing = scales.spacing;
   let totalWidth = (hand.length - 1) * spacing + cardW;
   if (totalWidth > maxTotalWidth) {
     spacing = (maxTotalWidth - cardW) / (hand.length - 1);
