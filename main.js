@@ -475,6 +475,7 @@ function generateShortId() {
 }
 
 function initPeer() {
+  logToScreen('PeerJS: Initializing...');
   if (!navigator.onLine) {
     alert("Warning: You seem to be offline. PeerJS requires an internet connection to establish the initial connection.");
   }
@@ -493,6 +494,8 @@ function initPeer() {
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
         // Public TURN servers (OpenRelay)
         {
           urls: 'turn:openrelay.metered.ca:80',
@@ -501,6 +504,11 @@ function initPeer() {
         },
         {
           urls: 'turn:openrelay.metered.ca:443',
+          username: 'openrelayproject',
+          credential: 'openrelayproject'
+        },
+        {
+          urls: 'turn:openrelay.metered.ca:443?transport=tcp',
           username: 'openrelayproject',
           credential: 'openrelayproject'
         }
@@ -524,8 +532,10 @@ function initPeer() {
   });
 
   peer.on('connection', (conn) => {
+    logToScreen('Incoming connection from ' + conn.peer);
     // Incoming connection (Host side)
     if (!isHost) {
+      logToScreen('Rejected connection: Not a host');
       conn.close();
       return;
     }
@@ -535,6 +545,7 @@ function initPeer() {
     });
 
     conn.on('open', () => {
+      logToScreen('Connection opened with ' + conn.peer);
       connections.push(conn);
       // Wait for 'join' message
     });
@@ -568,37 +579,48 @@ function connectToHost(hostId) {
   logToScreen('Connecting to ' + fullHostId);
   showToast("Connecting...");
 
-  hostConn = peer.connect(fullHostId, {
-    reliable: true
-  });
+  // Remove 'reliable: true' as it can cause issues on some mobile browsers
+  hostConn = peer.connect(fullHostId);
 
-  hostConn.on('open', () => {
-    console.log('PeerJS: Connection established with host');
+  // Add a timeout for the connection
+  const connectionTimeout = setTimeout(() => {
+    if (hostConn && !hostConn.open) {
+      logToScreen('Stuck? Trying Force Connect...');
+      hostConn.close();
+      // Try again but with a fresh connection object
+      hostConn = peer.connect(fullHostId, {
+        reliable: false, // Try unreliable mode as a fallback
+        metadata: { retry: true }
+      });
+      setupConnectionListeners(hostConn, cleanId);
+    }
+  }, 7000);
+
+  setupConnectionListeners(hostConn, cleanId);
+}
+
+function setupConnectionListeners(conn, cleanId) {
+  conn.on('open', () => {
+    logToScreen('PeerJS: Connection established!');
     showToast("Joined Room!");
-    // Send join request
-    hostConn.send({ type: 'joinRoom', data: { playerName } });
+    conn.send({ type: 'joinRoom', data: { playerName } });
 
-    // Fix: Don't hide menu-overlay, just hide the form and show lobby
     document.getElementById('join-room-form').style.display = 'none';
     document.getElementById('lobby-view').style.display = 'block';
     document.getElementById('lobby-room-code').innerText = cleanId;
-
-    const statusEl = document.getElementById('peer-status');
-    if (statusEl) statusEl.innerText = "Joined Room: " + cleanId;
   });
 
-  hostConn.on('data', (msg) => {
+  conn.on('data', (msg) => {
     handleClientEvent(msg.type, msg.data);
   });
 
-  hostConn.on('close', () => {
-    alert('Disconnected from host');
+  conn.on('close', () => {
+    logToScreen('Connection closed');
     location.reload();
   });
 
-  hostConn.on('error', (err) => {
-    console.error('Connection error:', err);
-    alert('Could not connect to host');
+  conn.on('error', (err) => {
+    logToScreen('Conn Error: ' + err.type);
   });
 }
 
