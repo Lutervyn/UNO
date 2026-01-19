@@ -460,9 +460,6 @@ function init() {
   window.addEventListener('resize', resizeCanvas, false);
   document.addEventListener('fullscreenchange', resizeCanvas, false);
   resizeCanvas();
-
-  // Initialize Peer
-  initPeer();
 }
 
 function generateShortId() {
@@ -496,8 +493,12 @@ function initPeer() {
       'iceServers': [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' }
-      ]
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' }
+      ],
+      'sdpSemantics': 'unified-plan',
+      'bundlePolicy': 'max-bundle'
     }
   });
 
@@ -524,33 +525,28 @@ function initPeer() {
       return;
     }
 
-    // Aggressive Handshake: Setup listeners immediately
-    const setupHostConn = (c) => {
-      c.on('data', (data) => {
-        if (data.type === 'ping') {
-          c.send({ type: 'pong' });
-          return;
-        }
-        logToScreen('Data: ' + data.type);
-        handleServerAction(c.peer, data.type, data.data);
-      });
+    // Simplified Handshake: Listen for data IMMEDIATELY
+    conn.on('data', (data) => {
+      logToScreen('Data: ' + data.type);
+      handleServerAction(conn.peer, data.type, data.data);
+    });
 
-      c.on('open', () => {
-        logToScreen('Handshake with ' + c.peer);
-        if (!connections.includes(c)) connections.push(c);
-      });
+    conn.on('open', () => {
+      logToScreen('Open with ' + conn.peer);
+      if (!connections.includes(conn)) connections.push(conn);
+      conn.send({ type: 'welcome' });
+    });
 
-      c.on('close', () => {
-        logToScreen('Lost ' + c.peer);
-        connections = connections.filter(connObj => connObj !== c);
-        if (gameServer) gameServer.removePlayer(c.peer);
-      });
-    };
+    conn.on('close', () => {
+      logToScreen('Lost ' + conn.peer);
+      connections = connections.filter(c => c !== conn);
+      if (gameServer) gameServer.removePlayer(conn.peer);
+    });
 
+    // If already open, trigger welcome
     if (conn.open) {
-      setupHostConn(conn);
-    } else {
-      conn.on('open', () => setupHostConn(conn));
+      if (!connections.includes(conn)) connections.push(conn);
+      conn.send({ type: 'welcome' });
     }
   });
 
@@ -591,12 +587,35 @@ function connectToHost(hostId) {
   });
 
   hostConn.on('data', (msg) => {
-    if (msg.type === 'pong') {
-      logToScreen('Handshake Complete!');
-      return;
+    if (msg.type === 'welcome') {
+      logToScreen('Handshake OK!');
+      finishJoin();
     }
     handleClientEvent(msg.type, msg.data);
   });
+
+  // Manual Fallback
+  setTimeout(() => {
+    if (hostConn && !document.getElementById('lobby-view').style.display === 'block') {
+      logToScreen('Stuck? Tap Force Join');
+      showToast("Tap 'Force Join' if stuck!");
+      const btn = document.createElement('button');
+      btn.innerText = "FORCE JOIN";
+      btn.style.cssText = "position:fixed; top:10px; left:50%; transform:translateX(-50%); z-index:99999; padding:15px; background:red; color:white; font-weight:bold; border-radius:10px;";
+      btn.onclick = () => {
+        finishJoin();
+        btn.remove();
+      };
+      document.body.appendChild(btn);
+    }
+  }, 5000);
+
+  function finishJoin() {
+    hostConn.send({ type: 'joinRoom', data: { playerName } });
+    document.getElementById('join-room-form').style.display = 'none';
+    document.getElementById('lobby-view').style.display = 'block';
+    document.getElementById('lobby-room-code').innerText = cleanId;
+  }
 
   hostConn.on('error', (err) => {
     logToScreen('Error: ' + err.type);
@@ -773,38 +792,62 @@ function setupMenu() {
   });
 
   document.getElementById('btn-create-submit').onclick = () => {
-    if (!myPeerId) {
-      alert("Still connecting to the network. Please wait a moment and try again.");
-      return;
+    // Initialize PeerJS on user gesture
+    if (!peer) {
+      initPeer();
+      logToScreen("Initializing network...");
+      showToast("Starting Network...");
+      // Wait for peer to open before creating room
+      const checkPeer = setInterval(() => {
+        if (myPeerId) {
+          clearInterval(checkPeer);
+          finishCreate();
+        }
+      }, 500);
+    } else {
+      finishCreate();
     }
-    playerName = nameInput.value.trim() || playerName;
-    localStorage.setItem('playerName', playerName);
-    const maxPlayers = parseInt(document.getElementById('max-players-input').value);
 
-    isHost = true;
-    gameServer = new GameServer(maxPlayers);
-    gameServer.addPlayer(myPeerId, playerName); // Add self
+    function finishCreate() {
+      playerName = nameInput.value.trim() || playerName;
+      localStorage.setItem('playerName', playerName);
+      const maxPlayers = parseInt(document.getElementById('max-players-input').value);
 
-    createForm.style.display = 'none';
-    document.getElementById('lobby-view').style.display = 'block';
-    const displayId = myPeerId.replace('UNO-', '');
-    document.getElementById('lobby-room-code').innerText = displayId;
-    roomCode = displayId;
+      isHost = true;
+      gameServer = new GameServer(maxPlayers);
+      gameServer.addPlayer(myPeerId, playerName); // Add self
 
-    toggleFullscreen();
+      createForm.style.display = 'none';
+      document.getElementById('lobby-view').style.display = 'block';
+      const displayId = myPeerId.replace('UNO-', '');
+      document.getElementById('lobby-room-code').innerText = displayId;
+      roomCode = displayId;
+
+      toggleFullscreen();
+    }
   };
 
   document.getElementById('btn-join-submit').onclick = () => {
-    if (!myPeerId) {
-      alert("Still connecting to the network. Please wait a moment.");
-      return;
-    }
     playerName = nameInput.value.trim() || playerName;
     localStorage.setItem('playerName', playerName);
     const code = document.getElementById('room-code-input').value.trim().toUpperCase();
-    if (code) {
-      connectToHost(code);
-      toggleFullscreen();
+
+    if (!peer) {
+      initPeer();
+      const checkPeer = setInterval(() => {
+        if (myPeerId) {
+          clearInterval(checkPeer);
+          if (code) {
+            connectToHost(code);
+            toggleFullscreen();
+          }
+        }
+      }, 500);
+    } else {
+      if (code) {
+        connectToHost(code);
+        toggleFullscreen();
+      }
     }
   };
 
