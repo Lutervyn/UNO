@@ -476,6 +476,9 @@ function generateShortId() {
 
 function initPeer() {
   logToScreen('PeerJS: Initializing...');
+  if (window.Peer) {
+    logToScreen('PeerJS Version: ' + Peer.prototype.version || '1.5.x');
+  }
   if (!navigator.onLine) {
     alert("Warning: You seem to be offline. PeerJS requires an internet connection to establish the initial connection.");
   }
@@ -496,23 +499,10 @@ function initPeer() {
         { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun3.l.google.com:19302' },
         { urls: 'stun:stun4.l.google.com:19302' },
-        // Public TURN servers (OpenRelay)
-        {
-          urls: 'turn:openrelay.metered.ca:80',
-          username: 'openrelayproject',
-          credential: 'openrelayproject'
-        },
-        {
-          urls: 'turn:openrelay.metered.ca:443',
-          username: 'openrelayproject',
-          credential: 'openrelayproject'
-        },
-        {
-          urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-          username: 'openrelayproject',
-          credential: 'openrelayproject'
-        }
-      ]
+        { urls: 'stun:stun.services.mozilla.com' },
+        { urls: 'stun:stun.xten.com' }
+      ],
+      'iceCandidatePoolSize': 10
     }
   });
 
@@ -533,27 +523,40 @@ function initPeer() {
 
   peer.on('connection', (conn) => {
     logToScreen('Incoming connection from ' + conn.peer);
-    // Incoming connection (Host side)
+
     if (!isHost) {
-      logToScreen('Rejected connection: Not a host');
       conn.close();
       return;
     }
 
-    conn.on('data', (data) => {
-      handleServerAction(conn.peer, data.type, data.data);
-    });
+    // Aggressive Handshake: Setup listeners immediately
+    const setupHostConn = (c) => {
+      c.on('data', (data) => {
+        logToScreen('Data received from ' + c.peer + ': ' + data.type);
+        handleServerAction(c.peer, data.type, data.data);
+      });
 
-    conn.on('open', () => {
-      logToScreen('Connection opened with ' + conn.peer);
-      connections.push(conn);
-      // Wait for 'join' message
-    });
+      c.on('close', () => {
+        logToScreen('Connection closed by ' + c.peer);
+        connections = connections.filter(connObj => connObj !== c);
+        if (gameServer) gameServer.removePlayer(c.peer);
+      });
 
-    conn.on('close', () => {
-      connections = connections.filter(c => c !== conn);
-      if (gameServer) gameServer.removePlayer(conn.peer);
-    });
+      c.on('error', (err) => {
+        logToScreen('Conn Error with ' + c.peer + ': ' + err.type);
+      });
+
+      if (!connections.includes(c)) {
+        connections.push(c);
+        logToScreen('Connection active with ' + c.peer);
+      }
+    };
+
+    if (conn.open) {
+      setupHostConn(conn);
+    } else {
+      conn.on('open', () => setupHostConn(conn));
+    }
   });
 
   peer.on('error', (err) => {
@@ -579,8 +582,10 @@ function connectToHost(hostId) {
   logToScreen('Connecting to ' + fullHostId);
   showToast("Connecting...");
 
-  // Remove 'reliable: true' as it can cause issues on some mobile browsers
-  hostConn = peer.connect(fullHostId);
+  // Force JSON serialization for cross-device compatibility
+  hostConn = peer.connect(fullHostId, {
+    serialization: 'json'
+  });
 
   // Add a timeout for the connection
   const connectionTimeout = setTimeout(() => {
@@ -596,11 +601,12 @@ function connectToHost(hostId) {
     }
   }, 7000);
 
-  setupConnectionListeners(hostConn, cleanId);
+  setupConnectionListeners(hostConn, cleanId, connectionTimeout);
 }
 
-function setupConnectionListeners(conn, cleanId) {
+function setupConnectionListeners(conn, cleanId, timeout) {
   conn.on('open', () => {
+    if (timeout) clearTimeout(timeout);
     logToScreen('PeerJS: Connection established!');
     showToast("Joined Room!");
     conn.send({ type: 'joinRoom', data: { playerName } });
