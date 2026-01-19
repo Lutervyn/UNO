@@ -496,13 +496,8 @@ function initPeer() {
       'iceServers': [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
-        { urls: 'stun:stun.services.mozilla.com' },
-        { urls: 'stun:stun.xten.com' }
-      ],
-      'iceCandidatePoolSize': 10
+        { urls: 'stun:stun2.l.google.com:19302' }
+      ]
     }
   });
 
@@ -532,24 +527,24 @@ function initPeer() {
     // Aggressive Handshake: Setup listeners immediately
     const setupHostConn = (c) => {
       c.on('data', (data) => {
-        logToScreen('Data received from ' + c.peer + ': ' + data.type);
+        if (data.type === 'ping') {
+          c.send({ type: 'pong' });
+          return;
+        }
+        logToScreen('Data: ' + data.type);
         handleServerAction(c.peer, data.type, data.data);
       });
 
+      c.on('open', () => {
+        logToScreen('Handshake with ' + c.peer);
+        if (!connections.includes(c)) connections.push(c);
+      });
+
       c.on('close', () => {
-        logToScreen('Connection closed by ' + c.peer);
+        logToScreen('Lost ' + c.peer);
         connections = connections.filter(connObj => connObj !== c);
         if (gameServer) gameServer.removePlayer(c.peer);
       });
-
-      c.on('error', (err) => {
-        logToScreen('Conn Error with ' + c.peer + ': ' + err.type);
-      });
-
-      if (!connections.includes(c)) {
-        connections.push(c);
-        logToScreen('Connection active with ' + c.peer);
-      }
     };
 
     if (conn.open) {
@@ -579,54 +574,32 @@ function connectToHost(hostId) {
   const cleanId = hostId.trim().toUpperCase();
   const fullHostId = cleanId.startsWith('UNO-') ? cleanId : 'UNO-' + cleanId;
 
-  logToScreen('Connecting to ' + fullHostId);
-  showToast("Connecting...");
+  logToScreen('Joining ' + cleanId + '...');
+  hostConn = peer.connect(fullHostId);
 
-  // Force JSON serialization for cross-device compatibility
-  hostConn = peer.connect(fullHostId, {
-    serialization: 'json'
+  hostConn.on('open', () => {
+    logToScreen('Connected! Sending Ping...');
+    hostConn.send({ type: 'ping' });
+
+    // Send join request after a tiny delay
+    setTimeout(() => {
+      hostConn.send({ type: 'joinRoom', data: { playerName } });
+      document.getElementById('join-room-form').style.display = 'none';
+      document.getElementById('lobby-view').style.display = 'block';
+      document.getElementById('lobby-room-code').innerText = cleanId;
+    }, 500);
   });
 
-  // Add a timeout for the connection
-  const connectionTimeout = setTimeout(() => {
-    if (hostConn && !hostConn.open) {
-      logToScreen('Stuck? Trying Force Connect...');
-      hostConn.close();
-      // Try again but with a fresh connection object
-      hostConn = peer.connect(fullHostId, {
-        reliable: false, // Try unreliable mode as a fallback
-        metadata: { retry: true }
-      });
-      setupConnectionListeners(hostConn, cleanId);
+  hostConn.on('data', (msg) => {
+    if (msg.type === 'pong') {
+      logToScreen('Handshake Complete!');
+      return;
     }
-  }, 7000);
-
-  setupConnectionListeners(hostConn, cleanId, connectionTimeout);
-}
-
-function setupConnectionListeners(conn, cleanId, timeout) {
-  conn.on('open', () => {
-    if (timeout) clearTimeout(timeout);
-    logToScreen('PeerJS: Connection established!');
-    showToast("Joined Room!");
-    conn.send({ type: 'joinRoom', data: { playerName } });
-
-    document.getElementById('join-room-form').style.display = 'none';
-    document.getElementById('lobby-view').style.display = 'block';
-    document.getElementById('lobby-room-code').innerText = cleanId;
-  });
-
-  conn.on('data', (msg) => {
     handleClientEvent(msg.type, msg.data);
   });
 
-  conn.on('close', () => {
-    logToScreen('Connection closed');
-    location.reload();
-  });
-
-  conn.on('error', (err) => {
-    logToScreen('Conn Error: ' + err.type);
+  hostConn.on('error', (err) => {
+    logToScreen('Error: ' + err.type);
   });
 }
 
